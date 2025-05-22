@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Carte interactive de voyage</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <style>
+    body { margin: 0; font-family: sans-serif; }
+    #map { height: 100vh; }
+    .info {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: white;
+      padding: 10px;
+      border-radius: 8px;
+      box-shadow: 0 0 5px rgba(0,0,0,0.3);
+      max-width: 340px;
+      z-index: 1000;
+    }
+    .info input {
+      width: 100%;
+      padding: 6px;
+      margin-bottom: 5px;
+    }
+    .info button {
+      margin-top: 5px;
+      margin-right: 5px;
+    }
+    ol {
+      padding-left: 20px;
+    }
+    li {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+      cursor: move;
+    }
+    .delete-btn {
+      background: red;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 2px 6px;
+      cursor: pointer;
+    }
+    .distance {
+      font-size: 0.85em;
+      color: gray;
+    }
+  </style>
+</head>
+<body>
+
+<div id="map"></div>
+<div class="info">
+  <h3>Itinéraire</h3>
+  <input id="searchInput" placeholder="Ajouter une ville (ex : Paris)" />
+  <button onclick="searchCity()">➕ Ajouter</button>
+  <ol id="routeList"></ol>
+  <button onclick="resetMap()">🗑️ Réinitialiser</button>
+  <button onclick="exportRoute()">⬇️ Export JSON</button>
+  <button onclick="exportMapImage()">📸 Export Image</button>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+<script>
+  const map = L.map('map').setView([20, 0], 2);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  const markers = [];
+  const steps = [];
+  const route = L.polyline([], { color: 'blue' }).addTo(map);
+  const routeList = document.getElementById('routeList');
+
+  if (localStorage.getItem('tripData')) {
+    const saved = JSON.parse(localStorage.getItem('tripData'));
+    saved.forEach(async (pt) => {
+      await addPoint(pt.lat, pt.lng, pt.name, false);
+    });
+  }
+
+  map.on('click', async function(e) {
+    const { lat, lng } = e.latlng;
+    await addPoint(lat, lng);
+  });
+
+  async function addPoint(lat, lng, savedName = null, save = true) {
+    let name = savedName;
+    if (!name) {
+      name = await reverseGeocode(lat, lng) || `Lat: ${lat.toFixed(2)}, Lng: ${lng.toFixed(2)}`;
+    }
+
+    const marker = L.marker([lat, lng]).addTo(map).bindPopup(name);
+    markers.push(marker);
+    steps.push({ lat, lng, name });
+
+    if (save) saveRoute();
+    updateUI();
+  }
+
+  function updateUI() {
+    routeList.innerHTML = '';
+    route.setLatLngs(markers.map(m => m.getLatLng()));
+
+    steps.forEach((step, index) => {
+      const li = document.createElement('li');
+      li.setAttribute('data-id', index);
+      li.innerHTML = `
+        ${step.name}
+        <button class="delete-btn" onclick="deleteStep(${index})">❌</button>
+      `;
+      routeList.appendChild(li);
+
+      if (index > 0) {
+        const dist = getDistance(steps[index - 1], step);
+        const distanceLi = document.createElement('div');
+        distanceLi.className = 'distance';
+        distanceLi.innerText = `↳ ${dist.toFixed(1)} km`;
+        routeList.appendChild(distanceLi);
+      }
+    });
+  }
+
+  function deleteStep(index) {
+    map.removeLayer(markers[index]);
+    markers.splice(index, 1);
+    steps.splice(index, 1);
+    saveRoute();
+    updateUI();
+  }
+
+  function resetMap() {
+    markers.forEach(m => map.removeLayer(m));
+    markers.length = 0;
+    steps.length = 0;
+    route.setLatLngs([]);
+    routeList.innerHTML = '';
+    localStorage.removeItem('tripData');
+  }
+
+  function saveRoute() {
+    localStorage.setItem('tripData', JSON.stringify(steps));
+  }
+
+  function exportRoute() {
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(steps, null, 2));
+    const dlAnchor = document.createElement('a');
+    dlAnchor.setAttribute("href", dataStr);
+    dlAnchor.setAttribute("download", "itineraire.json");
+    document.body.appendChild(dlAnchor);
+    dlAnchor.click();
+    document.body.removeChild(dlAnchor);
+  }
+
+  function exportMapImage() {
+    html2canvas(document.getElementById('map')).then(canvas => {
+      const link = document.createElement('a');
+      link.download = 'carte-voyage.png';
+      link.href = canvas.toDataURL();
+      link.click();
+    });
+  }
+
+  async function reverseGeocode(lat, lng) {
+    const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`;
+    try {
+      const response = await fetch(url);
+      const data = await response.json();
+      return data.address.city || data.address.town || data.address.village || data.display_name;
+    } catch (e) {
+      console.error("Erreur de géocodage : ", e);
+      return null;
+    }
+  }
+
+  async function searchCity() {
+    const query = document.getElementById('searchInput').value;
+    if (!query) return;
+
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`;
+    try {
+      const response = await fetch(url);
+      const data = await response.json();
+      if (data && data[0]) {
+        const { lat, lon, display_name } = data[0];
+        map.setView([lat, lon], 5);
+        await addPoint(parseFloat(lat), parseFloat(lon), display_name);
+        document.getElementById('searchInput').value = '';
+      } else {
+        alert("Lieu introuvable.");
+      }
+    } catch (e) {
+      alert("Erreur lors de la recherche.");
+    }
+  }
+
+  Sortable.create(routeList, {
+    animation: 150,
+    onEnd: () => {
+      const newSteps = [];
+      const newMarkers = [];
+      document.querySelectorAll("#routeList li").forEach((li, index) => {
+        const id = parseInt(li.getAttribute('data-id'));
+        newSteps.push(steps[id]);
+        newMarkers.push(markers[id]);
+      });
+      steps.length = 0;
+      markers.length = 0;
+      steps.push(...newSteps);
+      markers.push(...newMarkers);
+      updateUI();
+      saveRoute();
+    }
+  });
+
+  function getDistance(a, b) {
+    const R = 6371;
+    const dLat = (b.lat - a.lat) * Math.PI / 180;
+    const dLon = (b.lng - a.lng) * Math.PI / 180;
+    const lat1 = a.lat * Math.PI / 180;
+    const lat2 = b.lat * Math.PI / 180;
+    const aDist = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                  Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);
+    const c = 2 * Math.atan2(Math.sqrt(aDist), Math.sqrt(1 - aDist));
+    return R * c;
+  }
+</script>
+
+</body>
+</html>
