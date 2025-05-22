@@ -64,6 +64,7 @@
   <button onclick="resetMap()">🗑️ Réinitialiser</button>
   <button onclick="exportRoute()">⬇️ Export JSON</button>
   <button onclick="exportMapImage()">📸 Export Image</button>
+  <input type="file" id="importInput" accept="application/json" />
 </div>
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
@@ -232,6 +233,25 @@
     const c = 2 * Math.atan2(Math.sqrt(aDist), Math.sqrt(1 - aDist));
     return R * c;
   }
+
+  document.getElementById('importInput').addEventListener('change', function(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async function(e) {
+    try {
+      const importedSteps = JSON.parse(e.target.result);
+      resetMap();
+      for (const pt of importedSteps) {
+        await addPoint(pt.lat, pt.lng, pt.name);
+      }
+    } catch (error) {
+      alert("Fichier JSON invalide.");
+    }
+  };
+  reader.readAsText(file);
+});
+
 </script>
 
 </body>
